@@ -1,0 +1,147 @@
+import tkinter as tk
+from tkinter import messagebox, ttk
+import requests
+import json
+import os
+
+class GitHubUserFinder:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("GitHub User Finder")
+        self.root.geometry("800x650")
+        self.root.minsize(800, 650)
+
+        # Файл для сохранения избранных
+        self.favorites_file = "favorites.json"
+        self.favorites = []  # Инициализируем пустой список
+        self.load_favorites()
+
+        self.setup_ui()
+
+    def setup_ui(self):
+        # Основной фрейм для поля ввода
+        input_frame = ttk.Frame(self.root)
+        input_frame.pack(pady=10, padx=20, fill="x")
+
+        ttk.Label(input_frame, text="GitHub username:").pack(side="left")
+        self.search_entry = ttk.Entry(input_frame, width=30)
+        self.search_entry.pack(side="left", padx=5)
+        self.search_entry.bind("<Return>", lambda e: self.search_user())
+
+        search_btn = ttk.Button(input_frame, text="Search", command=self.search_user)
+        search_btn.pack(side="left")
+
+        # Фрейм результатов поиска
+        results_frame = ttk.LabelFrame(self.root, text="Search Results")
+        results_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        # Используем Treeview для структурированного отображения
+        columns = ("Login", "Name", "Company", "Location", "Public Repos", "Profile URL")
+        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=8)
+
+        for col in columns:
+            self.results_tree.heading(col, text=col)
+            self.results_tree.column(col, width=140)
+
+        scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=self.results_tree.yview)
+        self.results_tree.configure(yscrollcommand=scrollbar.set)
+
+        self.results_tree.pack(side="left", fill="both", expand=True, padx=(5, 0), pady=5)
+        scrollbar.pack(side="right", fill="y", pady=5)
+
+        add_fav_btn = ttk.Button(results_frame, text="Add to Favorites", command=self.add_to_favorites)
+        add_fav_btn.pack(pady=5)
+
+        # Фрейм избранных пользователей
+        favorites_frame = ttk.LabelFrame(self.root, text="Favorites")
+        favorites_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        self.favorites_tree = ttk.Treeview(favorites_frame, columns=columns, show="headings", height=6)
+
+        for col in columns:
+            self.favorites_tree.heading(col, text=col)
+            self.favorites_tree.column(col, width=140)
+
+        fav_scrollbar = ttk.Scrollbar(favorites_frame, orient="vertical", command=self.favorites_tree.yview)
+        self.favorites_tree.configure(yscrollcommand=fav_scrollbar.set)
+
+        self.favorites_tree.pack(side="left", fill="both", expand=True, padx=(5, 0), pady=5)
+        fav_scrollbar.pack(side="right", fill="y", pady=5)
+
+        remove_fav_btn = ttk.Button(favorites_frame, text="Remove from Favorites", command=self.remove_from_favorites)
+        remove_fav_btn.pack(pady=5)
+
+        self.update_favorites_display()
+
+    def search_user(self):
+        username = self.search_entry.get().strip()
+        if not username:
+            messagebox.showerror("Error", "Search field cannot be empty!")
+            return
+
+        try:
+            # Показываем индикатор загрузки
+            self.root.config(cursor="wait")
+            self.root.update()
+
+            response = requests.get(f"https://api.github.com/users/{username}")
+            if response.status_code == 200:
+                user_data = response.json()
+                self.display_user(user_data)
+            elif response.status_code == 404:
+                messagebox.showerror("Error", f"User '{username}' not found on GitHub")
+            else:
+                messagebox.showerror("Error", f"GitHub API error: {response.status_code}")
+        except requests.RequestException as e:
+            messagebox.showerror("Error", f"Network error: {e}")
+        finally:
+            # Убираем индикатор загрузки
+            self.root.config(cursor="")
+
+    def display_user(self, user_data):
+        # Очищаем предыдущие результаты
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+
+        # Добавляем найденного пользователя
+        self.results_tree.insert("", "end", values=(
+            user_data.get("login", ""),
+            user_data.get("name", "No name"),
+            user_data.get("company", "No company"),
+            user_data.get("location", "No location"),
+            user_data.get("public_repos", 0),
+            user_data.get("html_url", "No URL")
+        ))
+
+    def load_favorites(self):
+        try:
+            if os.path.exists(self.favorites_file):
+                with open(self.favorites_file, 'r', encoding='utf-8') as f:
+                    self.favorites = json.load(f)
+            else:
+                # Создаём пустой файл, если его нет
+                self.favorites = []
+                self.save_favorites()
+        except (json.JSONDecodeError, IOError) as e:
+            messagebox.showerror("Error", f"Error loading favorites: {e}")
+            self.favorites = []
+
+    def save_favorites(self):
+        try:
+            with open(self.favorites_file, 'w', encoding='utf-8') as f:
+                json.dump(self.favorites, f, ensure_ascii=False, indent=2)
+        except IOError as e:
+            messagebox.showerror("Error", f"Error saving favorites: {e}")
+
+    def add_to_favorites(self):
+        selection = self.results_tree.selection()
+        if selection:
+            item = selection[0]
+            values = self.results_tree.item(item, "values")
+            user_login = values[0]
+
+            # Проверяем, есть ли пользователь уже в избранном
+            if not any(fav["login"] == user_login for fav in self.favorites):
+                # Получаем полные данные пользователя
+                url = f"https://api.github.com/users/{user_login}"
+                response = requests.get(url)
